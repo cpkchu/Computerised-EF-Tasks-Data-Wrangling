@@ -1,0 +1,196 @@
+---
+title: "Disks (Tower of Hanoi) Data Wrangling"
+author: "Claudia Pik-Ki Chu"
+date: "2/10/2020"
+output: word_document
+---
+```{r Load the package and raw file}
+options(scipen = 999) #Disable scientific notation
+library(tidyverse)  #Load the package
+Disks.CleanedRaw <- read.csv(file.choose(), header = TRUE) #Load the raw file
+```
+
+```{r Create cleaned raw file}
+## Create new columns in the raw dataset
+Disks.CleanedRaw <- Disks.CleanedRaw %>% 
+                      mutate(Complete_in_MinMoves = ifelse(ready == "TRUE"|ready == "true", 
+                                                    ifelse(min_moves == move, "Yes", ifelse(min_moves < move, "No", NA)), NA),
+                             Complete_Challenge = ifelse(ready == "TRUE"|ready == "true", 1, 0),
+                             Challenge_ACC = ifelse(ready == "TRUE"|ready == "true", 
+                                             ifelse(min_moves == move, 1, ifelse(min_moves < move, 0, NA)), NA),
+                             Category_ACC = ifelse(ready == "TRUE"|ready == "true", 
+                                            ifelse(min_moves == move, "correct", ifelse(min_moves < move, "incorrect", NA)), NA),
+                             LogRT = ifelse(time > 0, log(time), NA), 
+                             Difficulty_Category = ifelse(difficulty == "1", "Level 1",
+                                                   ifelse(difficulty == "2", "Level 2",
+                                                   ifelse(difficulty == "3", "Level 3", 
+                                                   ifelse(difficulty == "4", "Level 4",
+                                                   ifelse(difficulty == "5", "Level 5",
+                                                   ifelse(difficulty == "6", "Level 6",
+                                                   ifelse(difficulty == "7", "Level 7", 
+                                                   ifelse(difficulty == "8", "Level 8", NA)))))))),
+                             Attempt_Category = ifelse(attempt == "1", "-1",
+                                                ifelse(attempt == "2", "-2",
+                                                ifelse(attempt == "3", "-3", 
+                                                ifelse(attempt == "4", "-4",
+                                                ifelse(attempt == "5", "-5",
+                                                ifelse(attempt == "6", "-6", NA)))))),
+                             RT_EXCLUDE = ifelse((sd(time))*4 >= time, "include", "EXCLUDE"))
+                             
+Disks.CleanedRaw$DifficultyAttempt <- paste(Disks.CleanedRaw$Difficulty_Category, Disks.CleanedRaw$Attempt_Category)                            
+ 
+# Identify case(s) with insufficient trials
+Trials <- Disks.CleanedRaw %>% 
+                     mutate(count = 1) %>% 
+                     mutate() %>% group_by(subject_id, session_code) %>% 
+                         summarise(N_Rows = sum(count, na.rm = TRUE),
+                                   Max_Difficulty = max(difficulty, na.rm = TRUE), 
+                                   Max_Attempt = max(attempt, na.rm = TRUE)) %>% ungroup() %>% 
+                     mutate(Not_Enough_Trials_EXCLUDE = ifelse(Max_Difficulty == 1, ifelse(Max_Attempt < 6, "EXCLUDE", "Include"),
+                                                        ifelse(Max_Difficulty == 2, ifelse(Max_Attempt < 4, "EXCLUDE", "Include"),
+                                                        ifelse(Max_Difficulty == 3, ifelse(Max_Attempt < 4, "EXCLUDE", "Include"), "Include")))) %>% 
+                     select(c("subject_id", "session_code", "Not_Enough_Trials_EXCLUDE"))
+                            
+Disks.CleanedRaw <- left_join(Disks.CleanedRaw, Trials, by = c("subject_id","session_code"))
+Disks.CleanedRaw <- replace_na(Disks.CleanedRaw, list(Category_ACC = "missing"))
+
+# Create exclude summary
+Disks.CleanedRaw <- Disks.CleanedRaw %>% 
+                      mutate(EXCLUDE_Summary = ifelse(RT_EXCLUDE == "EXCLUDE", "EXCLUDE", 
+                                               ifelse(Not_Enough_Trials_EXCLUDE == "EXCLUDE", "EXCLUDE", "Include")))
+```
+
+```{r Create a file that summarises participant performance for each full attempt onto one row of data}
+## Create new columns 
+Moves <- Disks.CleanedRaw %>% 
+                               mutate(count = 1) %>% 
+                               group_by(subject_id, session_code, difficulty, min_moves, attempt) %>% 
+                               summarise(Moves = sum(count, na.rm = TRUE),
+                                         RTtotal = sum(time, na.rm = TRUE),
+                                         Error_RTtotal = sum(time_error, na.rm = TRUE)) %>% ungroup() 
+
+Trials <- Disks.CleanedRaw %>% 
+                               mutate(count = 1) %>% 
+                               group_by(subject_id, session_code, difficulty, min_moves, attempt, Category_ACC) %>% 
+                               summarise(Trials = length(count)) %>% 
+                               pivot_wider(names_from = Category_ACC, values_from = Trials, 
+                                           names_sep = "_", names_glue = "{.value}_{Category_ACC}") %>% 
+                               ungroup() %>% replace(is.na(.), 0)
+                                         
+Disks.Challenge <- left_join(Moves, Trials, by = c("subject_id","session_code", "difficulty", "min_moves", "attempt"))
+
+Disks.Challenge <- Disks.Challenge %>% 
+                   mutate(Challenge_ACC = ifelse(Trials_correct == "0", ifelse(Trials_incorrect == 1, 0, ifelse(Trials_missing == 20, 0, NA)), ifelse(Trials_correct == "1", 1, NA)),
+                          Category_ACC = ifelse(Trials_correct == "0", ifelse(Trials_incorrect == "1", "incorrect", ifelse(Trials_incorrect == "0", 
+                                         ifelse(Trials_missing == 20, "incorrect", NA), NA)), ifelse(Trials_correct == "1", "correct", NA)),
+                          LogRT = log(RTtotal),
+                          RTc = ifelse(Challenge_ACC == "1", RTtotal, NA),
+                          Difficulty_Category = difficulty)
+```
+
+```{r Create cleaned summary dataset}
+## Create new variables in the dataset
+NewVariables <- Disks.CleanedRaw %>% 
+                               mutate(count = 1) %>% 
+                               group_by(subject_id, session_code) %>% 
+                               summarise(Total_Trials = sum(count, na.rm = TRUE),
+                                         Task_DoT = min(date, na.rm = TRUE), 
+                                         Challenge_ACC = sum(Challenge_ACC, na.rm = TRUE), 
+                                         DiffMax = max(difficulty, na.rm = TRUE),
+                                         Total_Challenges = sum(Complete_Challenge, na.rm = TRUE), 
+                                         Move_RT = mean(time, na.rm = TRUE),
+                                         Move_LogRT = mean(LogRT, na.rm = TRUE))
+
+Attempts <- Disks.Challenge %>% 
+                            mutate(count = 1) %>% 
+                            group_by(subject_id, session_code) %>% 
+                            summarise(Challenge_Attempts = mean(attempt, na.rm = TRUE),
+                                   Trials_correct = sum(Trials_correct, na.rm = TRUE), 
+                                   Trials_incorrect = sum(Trials_incorrect, na.rm = TRUE),
+                                   RTtotal = mean(RTtotal, na.rm = TRUE), 
+                                   RTc = mean(RTc, na.rm = TRUE), 
+                                   LogRT = mean(LogRT, na.rm = TRUE))
+
+TrialsCorrect.Difficulty <- Disks.Challenge %>% 
+                            group_by(subject_id, session_code, difficulty) %>% 
+                            summarise(Trials_correct = sum(Trials_correct, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = difficulty, values_from = Trials_correct, 
+                                           names_sep = "_", names_glue = "Diff{difficulty}_{.value}")
+
+
+TrialsIncorrect.Difficulty <- Disks.Challenge %>% 
+                             group_by(subject_id, session_code, difficulty) %>% 
+                             summarise(Trials_incorrect = sum(Trials_incorrect, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = difficulty, values_from = Trials_incorrect, 
+                                           names_sep = "_", names_glue = "Diff{difficulty}_{.value}")
+
+Attempts.Difficulty <- Disks.Challenge %>% 
+                             group_by(subject_id, session_code, difficulty) %>% 
+                             summarise(Attempts = mean(attempt, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = difficulty, values_from = Attempts, 
+                                           names_sep = "_", names_glue = "Diff{difficulty}_{.value}")
+
+Moves.Difficulty <- Disks.Challenge %>% 
+                             group_by(subject_id, session_code, difficulty) %>% 
+                             summarise(Moves = mean(Moves, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = difficulty, values_from = Moves, 
+                                           names_sep = "_", names_glue = "Diff{difficulty}_{.value}")
+
+RTtotal.Difficulty <- Disks.Challenge %>% 
+                             group_by(subject_id, session_code, difficulty) %>% 
+                             summarise(RTtotal = mean(RTtotal, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = difficulty, values_from = RTtotal, 
+                                           names_sep = "_", names_glue = "Diff{difficulty}_{.value}")
+
+RTc.Difficulty <- Disks.Challenge %>% 
+                             group_by(subject_id, session_code, difficulty) %>% 
+                             summarise(RTc = mean(RTc, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = difficulty, values_from = RTc, 
+                                           names_sep = "_", names_glue = "Diff{difficulty}_{.value}")
+
+# Combine the files
+Disks.CleanedSummary <- plyr::join_all(list(NewVariables, Attempts, TrialsCorrect.Difficulty, TrialsIncorrect.Difficulty, 
+                                            Attempts.Difficulty, Moves.Difficulty, RTtotal.Difficulty, RTc.Difficulty), 
+                                   by = c("subject_id", "session_code"), type = "left")
+
+# Compute efficiency and accuracy scores
+Disks.CleanedSummary <- Disks.CleanedSummary %>% 
+                            mutate(ACC = ifelse(DiffMax == "1", 6 - Trials_incorrect,
+                                     ifelse(DiffMax == "2", 12 - Trials_incorrect,
+                                     ifelse(DiffMax == "3", 18 - Trials_incorrect,
+                                     ifelse(DiffMax == "4", 24 - Trials_incorrect,
+                                     ifelse(DiffMax == "5", 30 - Trials_incorrect,
+                                     ifelse(DiffMax == "6", 36 - Trials_incorrect,
+                                     ifelse(DiffMax == "7", 42 - Trials_incorrect,
+                                     ifelse(DiffMax == "8", 48 - Trials_incorrect,
+                                     ifelse(DiffMax == "9", 54 - Trials_incorrect, NA))))))))),
+                                   EFF = ACC/(RTc*0.001),
+                                      Diff1_EFF = (6 - Diff1_Trials_incorrect)/(Diff1_RTc*0.001),
+                                      Diff2_EFF = (6 - Diff2_Trials_incorrect)/(Diff2_RTc*0.001),
+                                      Diff3_EFF = (6 - Diff3_Trials_incorrect)/(Diff3_RTc*0.001),
+                                      Diff4_EFF = (6 - Diff4_Trials_incorrect)/(Diff4_RTc*0.001),
+                                      Diff5_EFF = (6 - Diff5_Trials_incorrect)/(Diff5_RTc*0.001),
+                                      Diff6_EFF = (6 - Diff6_Trials_incorrect)/(Diff6_RTc*0.001),
+                                      Diff7_EFF = (6 - Diff7_Trials_incorrect)/(Diff7_RTc*0.001),
+                                      Diff8_EFF = (6 - Diff8_Trials_incorrect)/(Diff8_RTc*0.001),
+                                      Diff9_EFF = (6 - Diff9_Trials_incorrect)/(Diff9_RTc*0.001)) #No need to run this line if there is no Diff9_Trials_incorrect or Diff9_RTc
+
+# Identify included and excluded trials
+IncludedTrials <- Disks.CleanedRaw %>% 
+                         mutate(count = 1) %>%  
+                         group_by(subject_id, session_code, EXCLUDE_Summary) %>% 
+                         summarise(Total_Trials = sum(count, na.rm = TRUE)) %>%
+                         pivot_wider(names_from = EXCLUDE_Summary, values_from = Total_Trials) %>% 
+                         ungroup() %>% replace(is.na(.), 0) %>% 
+                         rename(Included_Trials = Include,
+                                Excluded_Trials = EXCLUDE)
+
+Disks.CleanedSummary <- left_join(Disks.CleanedSummary, IncludedTrials, by = c("subject_id", "session_code")) %>% 
+                        mutate(Remaining_Trials = Total_Trials - Excluded_Trials, 
+                                EXCLUDE_Summary = ifelse(Remaining_Trials > 0, "Include", "EXCLUDE"))
+```
+
+```{r Save file}
+write.csv(Disks.CleanedSummary, "Disks.CleanedSummary.csv")
+## Note: the dataset needs to be checked manually to delete duplicated attempts
+```

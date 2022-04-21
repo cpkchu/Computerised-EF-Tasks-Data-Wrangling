@@ -1,0 +1,115 @@
+---
+title: "Patterns (Corsi Blocks) Data Wrangling"
+author: "Claudia Pik-Ki Chu"
+date: "2/12/2020"
+output: word_document
+---
+```{r Load the package and raw file}
+options(scipen = 999) #Disable scientific notation
+library(tidyverse)  #Load the package
+Patterns.CleanedRaw <- read.csv(file.choose(), header = TRUE) #Load the raw file
+```
+
+```{r}
+Patterns.CleanedRaw <- Patterns.CleanedRaw %>% 
+                       separate(time, c("RT_1", "RT_2", "RT_3", "RT_4", "RT_5", "RT_6", "RT_7", "RT_8", "RT_9"), ",") #Distinguish RT for each click 
+
+Patterns.CleanedRaw <- Patterns.CleanedRaw %>% 
+                       mutate_at(vars(starts_with("RT_")), as.numeric)
+```
+
+```{r Create cleaned raw file}
+## Create new columns in the raw dataset
+Patterns.CleanedRaw <- Patterns.CleanedRaw %>% 
+                       mutate(ACC = ifelse(correct == 1|correct == "1", 1, 0),
+                              Category_ACC = ifelse(correct == 1|correct == "1", "correct", "incorrect"),
+                              Difficulty_Level = difficulty,
+                              Difficulty_Category = as.character(Difficulty_Level),
+                              Pattern_Phase = ifelse(forward == 1|forward == "1", "Forward", "Backward"),
+                              RT_r1 = RT_1, RT_r2 = RT_2 - RT_1, RT_r3 = RT_3 - RT_2, RT_r4 = RT_4 - RT_3, RT_r5 = RT_5 - RT_4, 
+                              RT_r6 = RT_6 - RT_5, RT_r7 = RT_7 - RT_6, RT_r8 = RT_8 - RT_7, RT_r9 = RT_9 - RT_8)
+
+Patterns.CleanedRaw <- mutate(Patterns.CleanedRaw, RTtotal = rowSums(select(Patterns.CleanedRaw, starts_with("RT_r")), na.rm = TRUE)) 
+Patterns.CleanedRaw <- mutate(Patterns.CleanedRaw, RTclick = rowMeans(select(Patterns.CleanedRaw, starts_with("RT_r")), na.rm = TRUE))
+
+Patterns.CleanedRaw <- Patterns.CleanedRaw %>% 
+                       mutate(RTc = ifelse(ACC == 1, RTtotal, NA),
+                              LogRT = ifelse(RTtotal > 0, log(RTtotal), NA),
+                              RT_EXCLUDE = ifelse((sd(RTtotal))*4 >= RTtotal, "Include", "EXCLUDE"))
+
+# Identify case(s) with insufficient trials
+Trials <- Patterns.CleanedRaw %>% 
+                     mutate(count = 1) %>% 
+                     group_by(subject_id, session_code, Pattern_Phase) %>% 
+                         summarise(Total_Trials = sum(count, na.rm = TRUE)) %>%
+                         pivot_wider(names_from = Pattern_Phase, values_from = Total_Trials) %>% 
+                         ungroup() %>% replace(is.na(.), 0) %>% 
+                         rename(Backward_Trials = Backward,
+                                Forward_Trials = Forward) %>% 
+                     mutate(BW_Not_Enough_Trials_EXCLUDE = ifelse(Backward_Trials < 5, "EXCLUDE", "Include"),
+                            FW_Not_Enough_Trials_EXCLUDE = ifelse(Forward_Trials < 5, "EXCLUDE", "Include")) %>% 
+                     select(c("subject_id", "session_code", "BW_Not_Enough_Trials_EXCLUDE", "FW_Not_Enough_Trials_EXCLUDE"))
+
+Patterns.CleanedRaw <- left_join(Patterns.CleanedRaw, Trials, by = c("subject_id","session_code"))
+
+# Create exclude summary
+Patterns.CleanedRaw <- Patterns.CleanedRaw %>% 
+                        mutate(BW_EXCLUDE_Summary = ifelse(Pattern_Phase == "Backward",
+                                                    ifelse(RT_EXCLUDE == "EXCLUDE", "EXCLUDE",
+                                                    ifelse(BW_Not_Enough_Trials_EXCLUDE == "EXCLUDE","EXCLUDE", "Include")), "Include"),
+                               FW_EXCLUDE_Summary = ifelse(Pattern_Phase == "Forward",
+                                                    ifelse(RT_EXCLUDE == "EXCLUDE", "EXCLUDE",
+                                                    ifelse(FW_Not_Enough_Trials_EXCLUDE == "EXCLUDE","EXCLUDE", "Include")), "Include"),
+                               EXCLUDE_Summary = ifelse(Pattern_Phase == "Forward", FW_EXCLUDE_Summary, BW_EXCLUDE_Summary))
+
+```
+
+```{r Create cleaned summary dataset}
+## Create new variables in the dataset
+NewVariables <- Patterns.CleanedRaw %>% 
+                               mutate(count = 1) %>% 
+                               group_by(subject_id, session_code, Pattern_Phase) %>% 
+                               summarise(Total_Trials = sum(count, na.rm = TRUE),
+                                         Task_DoT = min(date, na.rm = TRUE), 
+                                         ACC = sum(ACC, na.rm = TRUE), 
+                                         DiffMax = max(Difficulty_Level, na.rm = TRUE),
+                                         RTtotal = mean(RTtotal, na.rm = TRUE), 
+                                         RTclick = mean(RTclick, na.rm = TRUE),
+                                         RTc = mean(RTc, na.rm = TRUE),
+                                         LogRT = mean(LogRT, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = Pattern_Phase, values_from = c("Total_Trials", "Task_DoT", "ACC", "DiffMax", 
+                                                                                       "RTtotal", "RTclick", "RTc", "LogRT"), 
+                                           names_sep = "_", names_glue = "{Pattern_Phase}_{.value}") %>% ungroup() %>% 
+                               mutate(Backward_EFF = Backward_ACC/(Backward_RTc*0.001), 
+                                      Forward_EFF = Forward_ACC/(Forward_RTc*0.001)) 
+
+# Identify included and excluded trials
+BW.IncludedTrials <- Patterns.CleanedRaw %>% 
+                         mutate(count = 1) %>%  
+                         group_by(subject_id, session_code, Pattern_Phase, BW_EXCLUDE_Summary)  %>% 
+                         summarise(Trials = sum(count, na.rm = TRUE)) %>% filter(Pattern_Phase == "Backward") %>% 
+                               pivot_wider(names_from = c("Pattern_Phase", "BW_EXCLUDE_Summary"), values_from = Trials, 
+                                           names_sep = "_", names_glue = "{Pattern_Phase}_{BW_EXCLUDE_Summary}_{.value}") %>% 
+                         ungroup() %>% replace(is.na(.), 0)
+  
+FW.IncludedTrials <- Patterns.CleanedRaw %>% 
+                         mutate(count = 1) %>%  
+                         group_by(subject_id, session_code, Pattern_Phase, FW_EXCLUDE_Summary)  %>% 
+                         summarise(Trials = sum(count, na.rm = TRUE)) %>% filter(Pattern_Phase == "Forward") %>% 
+                               pivot_wider(names_from = c("Pattern_Phase", "FW_EXCLUDE_Summary"), values_from = Trials, 
+                                           names_sep = "_", names_glue = "{Pattern_Phase}_{FW_EXCLUDE_Summary}_{.value}") %>% 
+                         ungroup() %>% replace(is.na(.), 0)
+  
+# Combine the files
+Patterns.CleanedSummary <- plyr::join_all(list(NewVariables, BW.IncludedTrials, FW.IncludedTrials), 
+                                   by = c("subject_id", "session_code"), type = "left") %>% 
+                           mutate(Backward_Remaining_Trials = Backward_Total_Trials - Backward_EXCLUDE_Trials, 
+                                  Forward_Remaining_Trials = Forward_Total_Trials - Forward_EXCLUDE_Trials,
+                                  Backward_EXCLUDE_Summary = ifelse(Backward_Remaining_Trials > 0 ,"Include", "EXCLUDE"),
+                                  Forward_EXCLUDE_Summary = ifelse(Forward_Remaining_Trials > 0 ,"Include", "EXCLUDE"))
+```
+
+```{r Save file}
+write.csv(Patterns.CleanedSummary, "Patterns.CleanedSummary.csv")
+## Note: the dataset needs to be checked manually to delete duplicated attempts
+```

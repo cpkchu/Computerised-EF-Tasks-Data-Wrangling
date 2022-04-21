@@ -1,0 +1,140 @@
+---
+title: "Colour-Shape (Figures) Data Wrangling"
+author: "Claudia Pik-Ki Chu"
+date: "2/10/2020"
+output: word_document
+---
+```{r Load the package and raw file}
+options(scipen = 999) #Disable scientific notation
+library(tidyverse)  #Load the package
+Figures.CleanedRaw <- read.csv(file.choose(), header = TRUE) #Load the raw file
+```
+
+```{r Create cleaned raw file}
+## Create new columns in the raw dataset
+Figures.CleanedRaw <- Figures.CleanedRaw %>% 
+                      mutate(ACC = ifelse(correct == "TRUE"|correct == "true", 1, 0),
+                             Category_ACC = ifelse(correct == "TRUE"|correct == "true", "True", "False"),
+                             LogRT = ifelse(time > 0, log(time), NA),
+                             RTc = ifelse(correct == "TRUE"|correct == "true", time, NA),
+                             Task_Type = ifelse(type == "color", "color", "shape"),
+                             Block_Type = ifelse(test_id == "shape", "Pure", ifelse(test_id == "color", "Pure", "Mixed")),
+                             Trial_Type = ifelse(switching == 1|switching == "1", "Switch", "Repeat"),
+                             Congruency = ifelse(congruent == 0|congruent == "0", "Incongruent", "Congruent"),
+                             RT_EXCLUDE = ifelse((sd(time))*4 >= time, "Include", "EXCLUDE"))
+
+# Identify case(s) with insufficient trials
+Trials <- Figures.CleanedRaw %>% 
+                     mutate(count = 1) %>% 
+                     group_by(subject_id, session_code) %>% 
+                         summarise(Total_Trials = sum(count, na.rm = TRUE)) %>% 
+                     mutate(Not_Enough_Trials_EXCLUDE = ifelse(Total_Trials < 75, "EXCLUDE", "Include")) %>% select(-Total_Trials)
+Figures.CleanedRaw <- left_join(Figures.CleanedRaw, Trials, by = c("subject_id","session_code"))
+
+# Create exclude summary
+Figures.CleanedRaw <- Figures.CleanedRaw %>% 
+                      mutate(EXCLUDE_Summary = ifelse(RT_EXCLUDE == "EXCLUDE", "EXCLUDE", 
+                                               ifelse(Not_Enough_Trials_EXCLUDE == "EXCLUDE","EXCLUDE", "Include")))
+
+# Remove the first trial of every block
+Figures.CleanedRaw <- Figures.CleanedRaw %>% filter(exercise_id > 1)
+```
+
+```{r Create cleaned summary dataset}
+## Create new variables in the dataset
+NewVariables <- Figures.CleanedRaw %>% 
+                               mutate(count = 1) %>% 
+                               group_by(subject_id, session_code) %>% 
+                               summarise(Total_Trials = sum(count, na.rm = TRUE),
+                                         Task_DoT = min(date, na.rm = TRUE), 
+                                         ACC = sum(ACC, na.rm = TRUE), 
+                                         RT = mean(time, na.rm = TRUE), 
+                                         RTc = mean(RTc, na.rm = TRUE), 
+                                         LogRT = mean(LogRT, na.rm = TRUE))
+
+BlockType <- Figures.CleanedRaw %>% 
+                               mutate() %>% group_by(subject_id, session_code, Block_Type) %>% 
+                               summarise(ACC = sum(ACC, na.rm = TRUE),
+                                         RT = mean(time, na.rm = TRUE),
+                                         RTc = mean(RTc, na.rm = TRUE), 
+                                         LogRT = mean(LogRT, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = Block_Type, values_from = c("ACC", "RT", "RTc", "LogRT"), 
+                                           names_sep = "_", names_glue = "{Block_Type}_{.value}") 
+
+TrialType <- Figures.CleanedRaw %>% 
+                               mutate() %>% group_by(subject_id, session_code, Trial_Type) %>% 
+                               summarise(ACC = sum(ACC, na.rm = TRUE),
+                                         RT = mean(time, na.rm = TRUE),
+                                         RTc = mean(RTc, na.rm = TRUE), 
+                                         LogRT = mean(LogRT, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = Trial_Type, values_from = c("ACC", "RT", "RTc", "LogRT"), 
+                                           names_sep = "_", names_glue = "{Trial_Type}_{.value}") 
+
+Congruency <- Figures.CleanedRaw %>% 
+                               group_by(subject_id, session_code, Congruency) %>% 
+                               summarise(ACC = sum(ACC, na.rm = TRUE),
+                                         RT = mean(time, na.rm = TRUE),
+                                         RTc = mean(RTc, na.rm = TRUE), 
+                                         LogRT = mean(LogRT, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = Congruency, values_from = c("ACC", "RT", "RTc", "LogRT"), 
+                                           names_sep = "_", names_glue = "{Congruency}_{.value}") 
+
+Congruency.BlockType <- Figures.CleanedRaw %>% 
+                               group_by(subject_id, session_code, Congruency, Block_Type) %>% 
+                               summarise(ACC = sum(ACC, na.rm = TRUE),
+                                         RT = mean(time, na.rm = TRUE),
+                                         RTc = mean(RTc, na.rm = TRUE), 
+                                         LogRT = mean(LogRT, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = c("Congruency", "Block_Type"), values_from = c("ACC", "RT", "RTc", "LogRT"), 
+                                           names_sep = "_", names_glue = "{Congruency}{Block_Type}_{.value}")
+
+Congruency.TrialType <- Figures.CleanedRaw %>% 
+                               group_by(subject_id, session_code, Congruency, Trial_Type) %>% 
+                               summarise(ACC = sum(ACC, na.rm = TRUE),
+                                         RT = mean(time, na.rm = TRUE),
+                                         RTc = mean(RTc, na.rm = TRUE), 
+                                         LogRT = mean(LogRT, na.rm = TRUE)) %>% 
+                               pivot_wider(names_from = c("Congruency", "Trial_Type"), values_from = c("ACC", "RT", "RTc", "LogRT"), 
+                                           names_sep = "_", names_glue = "{Congruency}{Trial_Type}_{.value}")
+
+# Combine the files
+Figures.CleanedSummary <- plyr::join_all(list(NewVariables, BlockType, TrialType, Congruency, Congruency.BlockType, Congruency.TrialType), 
+                                   by = c("subject_id", "session_code"), type = "left")
+
+# Compute efficiency scores
+Figures.CleanedSummary <- Figures.CleanedSummary %>% 
+                          mutate(EFF = ACC/(RTc*0.001),
+                                 Mixed_EFF = Mixed_ACC/(Mixed_RTc*0.001), 
+                                 Pure_EFF = Pure_ACC/(Pure_RTc*0.001),
+                                 Repeat_EFF = Repeat_ACC/(Repeat_RTc*0.001),
+                                 Switch_EFF = Switch_ACC/(Switch_RTc*0.001), 
+                                 Congruent_EFF = Congruent_ACC/(Congruent_RTc*0.001),
+                                 Incongruent_EFF = Incongruent_ACC/(Congruent_RTc*0.001),
+                                 CongruentMixed_EFF = CongruentMixed_ACC/(CongruentMixed_RTc*0.001),
+                                 CongruentPure_EFF = CongruentPure_ACC/(CongruentPure_RTc*0.001),
+                                 IncongruentMixed_EFF = IncongruentMixed_ACC/(IncongruentMixed_RTc*0.001),
+                                 IncongruentPure_EFF = IncongruentPure_ACC/(IncongruentPure_RTc*0.001),
+                                 CongruentRepeat_EFF = CongruentRepeat_ACC/(CongruentRepeat_RTc*0.001),
+                                 CongruentSwitch_EFF = CongruentSwitch_ACC/(CongruentSwitch_RTc*0.001), 
+                                 IncongruentRepeat_EFF = IncongruentRepeat_ACC/(IncongruentRepeat_RTc*0.001),
+                                 IncongruentSwitch_EFF = IncongruentSwitch_ACC/(IncongruentSwitch_RTc*0.001))
+
+# Identify included and excluded trials
+IncludedTrials <- Figures.CleanedRaw %>% 
+                         mutate(count = 1) %>%  
+                         group_by(subject_id, session_code, EXCLUDE_Summary) %>% 
+                         summarise(Total_Trials = sum(count, na.rm = TRUE)) %>%
+                         pivot_wider(names_from = EXCLUDE_Summary, values_from = Total_Trials) %>% 
+                         ungroup() %>% replace(is.na(.), 0) %>% 
+                         rename(Included_Trials = Include,
+                                Excluded_Trials = EXCLUDE)
+
+Figures.CleanedSummary <- left_join(Figures.CleanedSummary, IncludedTrials, by = c("subject_id", "session_code")) %>% 
+                          mutate(Remaining_Trials = Total_Trials - Excluded_Trials, 
+                                EXCLUDE_Summary = ifelse(Remaining_Trials > 0, "Include", "EXCLUDE"))
+```
+
+```{r Save file}
+write.csv(Figures.CleanedSummary, "Figures.CleanedSummary.csv")
+## Note: the dataset needs to be checked manually to delete duplicated attempts
+```

@@ -1,0 +1,97 @@
+---
+title: "Soccer (Stop Signal) Data Wrangling"
+author: "Claudia Pik-Ki Chu"
+date: "2/12/2020"
+output: word_document
+---
+```{r Load the package and raw file}
+options(scipen = 999) #Disable scientific notation
+library(tidyverse)  #Load the package
+Soccer.CleanedRaw <- read.csv(file.choose(), header = TRUE) #Load the raw file
+```
+
+```{r Create cleaned raw dataset}
+## Create new columns in the raw file
+Soccer.CleanedRaw <- Soccer.CleanedRaw %>% 
+                     mutate(ACC = ifelse(correct == "TRUE"|correct == "true", 1, 0),
+                            Category_ACC = ifelse(correct == "TRUE"|correct == "true", "True", "False"),
+                            Commission_Errors = ifelse(correct == "TRUE"|correct == "true", 0, 
+                                                ifelse(sound == "TRUE"|sound == "true", 
+                                                ifelse(answer == "RIGHT"|answer == "right", 1, 
+                                                ifelse(answer == "LEFT"|answer == "left", 1, 0)),
+                                                ifelse(answer == "RIGHT"|answer == "right", 0, 
+                                                ifelse(answer == "LEFT"|answer == "left", 0, 0)))),
+                            Omission_Errors = ifelse(correct == "TRUE"|correct == "true", 0, 
+                                              ifelse(sound == "TRUE"|sound == "true",
+                                              ifelse(answer == "RIGHT"|answer == "right", 0,
+                                              ifelse(answer == "LEFT"|answer == "left", 0, 0)),
+                                              ifelse(answer == "RIGHT"|answer == "right", 0,
+                                              ifelse(answer == "LEFT"|answer == "left", 0, 1)))),
+                            LogRT = ifelse(time > 0, log(time), NA),
+                            RTc = ifelse(sound == "FALSE"|sound == "false", ifelse(ACC == 1, time, NA), ifelse (ACC == 1, NA, NA)),
+                            Trial_Type = ifelse(sound == "TRUE"|sound == "true", "Stop", "Go"),
+                            RTgo = ifelse(Trial_Type == "Go", time, NA),
+                            RTwait = ifelse(Trial_Type == "Stop", sound_gap, NA),
+                            Commission_RT = ifelse(Commission_Errors == "1", time, NA),
+                            Omission_RT = ifelse(Omission_Errors == "1", time, NA),
+                            RT_EXCLUDE = ifelse((sd(time))*4 >= time, "Include", "EXCLUDE"))
+
+# Identify case(s) with insufficient trials
+Trials <- Soccer.CleanedRaw %>% 
+                     mutate(count = 1) %>% 
+                     group_by(subject_id, session_code) %>% 
+                         summarise(Total_Trials = sum(count, na.rm = TRUE)) %>% 
+                     mutate(Not_Enough_Trials_EXCLUDE = ifelse(Total_Trials < 25, "EXCLUDE", "Include")) %>% select(-Total_Trials)
+Soccer.CleanedRaw <- left_join(Soccer.CleanedRaw, Trials, by = c("subject_id","session_code"))
+
+# Create exclude summary
+Soccer.CleanedRaw <- Soccer.CleanedRaw %>% 
+                     mutate(EXCLUDE_Summary = ifelse(RT_EXCLUDE == "EXCLUDE", "EXCLUDE", 
+                                              ifelse(Not_Enough_Trials_EXCLUDE == "EXCLUDE","EXCLUDE", "Include")))
+```
+
+```{r Create cleaned summary dataset}
+## Create new variables in the dataset
+NewVariables <- Soccer.CleanedRaw %>% 
+                               mutate(count = 1) %>% 
+                               group_by(subject_id, session_code) %>% 
+                               summarise(Total_Trials = sum(count, na.rm = TRUE),
+                                         Task_DoT = min(date, na.rm = TRUE), 
+                                         ACC = sum(ACC, na.rm = TRUE), 
+                                         RT = mean(time, na.rm = TRUE), 
+                                         RTc = mean(RTc, na.rm = TRUE), 
+                                         RTgo = mean(RTgo, na.rm = TRUE), 
+                                         LogRT = mean(LogRT, na.rm = TRUE), 
+                                         RTwait = mean(sound_gap, na.rm = TRUE), 
+                                         RTwait_median = median(sound_gap, na.rm = TRUE), 
+                                         Commission_Errors = sum(Commission_Errors, na.rm = TRUE),
+                                         Omission_Errors = sum(Omission_Errors, na.rm = TRUE), 
+                                         Commission_RT = mean(Commission_RT, na.rm = TRUE),
+                                         Omission_RT = mean(Omission_RT, na.rm = TRUE)) %>% 
+                         ungroup() %>% 
+                         mutate(EFF = ACC/(RTc*0.001), 
+                                Stop_Signal_RT = RTgo - RTwait, 
+                                Commission_EFF = Commission_Errors/(Commission_RT*0.001),
+                                Omission_EFF = Omission_Errors/(Omission_RT*0.001)) #No need to run this line if there is no omission error in the dataset
+
+# Identify included and excluded trials
+IncludedTrials <- Soccer.CleanedRaw %>% 
+                         mutate(count = 1) %>% 
+                         group_by(subject_id, session_code, EXCLUDE_Summary) %>% 
+                         summarise(Total_Trials = sum(count, na.rm = TRUE)) %>%
+                         pivot_wider(names_from = EXCLUDE_Summary, values_from = Total_Trials) %>% 
+                         ungroup() %>% replace(is.na(.), 0) %>% 
+                         rename(Included_Trials = Include,
+                                Excluded_Trials = EXCLUDE)
+
+# Combine the files
+Soccer.CleanedSummary <- left_join(NewVariables, IncludedTrials, by = c("subject_id", "session_code")) %>% 
+                         mutate(Remaining_Trials = Total_Trials - Excluded_Trials, 
+                                EXCLUDE_Summary = ifelse(Remaining_Trials > 0, "Include", "EXCLUDE"))
+```
+
+```{r Save file}
+write.csv(Soccer.CleanedSummary, "Soccer.CleanedSummary.csv")
+## Note: the dataset needs to be checked manually to delete duplicated attempts
+```
+
