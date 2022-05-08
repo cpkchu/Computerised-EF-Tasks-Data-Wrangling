@@ -135,6 +135,6 @@ Figures.CleanedSummary <- left_join(Figures.CleanedSummary, IncludedTrials, by =
 ```
 
 ```{r Save file}
-write.csv(Figures.CleanedSummary, "Figures.CleanedSummary.csv")
+readr::write_csv(Figures.CleanedSummary, "Figures.CleanedSummary.csv")
 ## Note: the dataset needs to be checked manually to delete duplicated attempts
 ```
