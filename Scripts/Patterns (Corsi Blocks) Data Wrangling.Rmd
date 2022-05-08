@@ -110,6 +110,6 @@ Patterns.CleanedSummary <- plyr::join_all(list(NewVariables, BW.IncludedTrials, 
 ```
 
 ```{r Save file}
-write.csv(Patterns.CleanedSummary, "Patterns.CleanedSummary.csv")
+readr::write_csv(Patterns.CleanedSummary, "Patterns.CleanedSummary.csv")
 ## Note: the dataset needs to be checked manually to delete duplicated attempts
 ```
