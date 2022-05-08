@@ -91,7 +91,7 @@ Soccer.CleanedSummary <- left_join(NewVariables, IncludedTrials, by = c("subject
 ```
 
 ```{r Save file}
-write.csv(Soccer.CleanedSummary, "Soccer.CleanedSummary.csv")
+readr::write_csv(Soccer.CleanedSummary, "Soccer.CleanedSummary.csv")
 ## Note: the dataset needs to be checked manually to delete duplicated attempts
 ```
 
