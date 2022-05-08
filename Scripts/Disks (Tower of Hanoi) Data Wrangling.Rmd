@@ -191,6 +191,6 @@ Disks.CleanedSummary <- left_join(Disks.CleanedSummary, IncludedTrials, by = c("
 ```
 
 ```{r Save file}
-write.csv(Disks.CleanedSummary, "Disks.CleanedSummary.csv")
+readr::write_csv(Disks.CleanedSummary, "Disks.CleanedSummary.csv")
 ## Note: the dataset needs to be checked manually to delete duplicated attempts
 ```
